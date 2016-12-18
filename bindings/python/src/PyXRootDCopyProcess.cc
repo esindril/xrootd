@@ -149,6 +149,7 @@ namespace PyXRootD
     PyTuple_SetItem(tuple, 0, ConvertType(&status));
     PyTuple_SetItem(tuple, 1, ConvertType(self->results));
 
+    delete handler;
     return tuple;
   }
 }

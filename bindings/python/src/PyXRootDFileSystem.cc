@@ -35,34 +35,89 @@ namespace PyXRootD
   //----------------------------------------------------------------------------
   //! Copy a file
   //----------------------------------------------------------------------------
-  PyObject* FileSystem::Copy( FileSystem *self, PyObject *args, PyObject *kwds )
+  PyObject* FileSystem::Copy(FileSystem* self, PyObject* args, PyObject* kwds)
   {
-    static const char      *kwlist[] = { "source", "target", "force", NULL };
-    const  char            *source, *target;
+    static const char*      kwlist[] = { "source", "target", "force", NULL };
+    const  char*            source, *target;
     bool                    force = false;
-    PyObject               *pystatus = NULL;
-    CopyProcess            *copyprocess = NULL;
+    PyObject*               pystatus = NULL;
+    PyObject*               ret = NULL;
+    CopyProcess*            copyprocess = NULL;
 
-    if ( !PyArg_ParseTupleAndKeywords( args, kwds, "ss|i:copy",
-         (char**) kwlist, &source, &target, &force ) ) return NULL;
+    assert(!PyErr_Occurred());
+    Py_XINCREF(args);
+    Py_XINCREF(kwds);
+
+    if (!PyArg_ParseTupleAndKeywords(args, kwds, "ss|i:copy",
+				     (char**) kwlist, &source, &target, &force)) {
+      XrdCl::XRootDStatus xrd_st(XrdCl::stError, XrdCl::errInvalidArgs, 0,
+				 "Invalid source/target input");
+      pystatus = ConvertType(&xrd_st);
+      goto error;
+    }
 
     CopyProcessType.tp_new = PyType_GenericNew;
-    if ( PyType_Ready( &CopyProcessType ) < 0 ) return NULL;
 
-    copyprocess = (CopyProcess*)
-               PyObject_CallObject( (PyObject *) &CopyProcessType, NULL );
-    if ( !copyprocess ) return NULL;
+    if (PyType_Ready(&CopyProcessType) < 0) {
+      XrdCl::XRootDStatus xrd_st(XrdCl::stError, 0, 0, "Failed to allocate new "
+				 "copy process object");
+      pystatus =  ConvertType(&xrd_st);
+      goto error;
+    }
 
-    copyprocess->AddJob( copyprocess, args, kwds );
-    pystatus = copyprocess->Prepare( copyprocess, NULL, NULL );
-    if ( !pystatus ) return NULL;
-    if ( PyDict_GetItemString( pystatus, "ok" ) == Py_False ) return pystatus;
+    copyprocess = (CopyProcess*)(PyObject_CallObject((PyObject*) &CopyProcessType,
+						     NULL));
 
-    pystatus = copyprocess->Run( copyprocess, PyTuple_New(0), PyDict_New() );
-    if ( !pystatus ) return NULL;
+    if (!copyprocess) {
+      XrdCl::XRootDStatus xrd_st(XrdCl::stError, 0, 0, "Failed to bind new copy "
+				 "process object");
+      pystatus = ConvertType(&xrd_st);
+      goto error;
+    }
 
-    Py_DECREF( copyprocess );
-    return pystatus;
+    pystatus = copyprocess->AddJob(copyprocess, args, kwds);
+
+    if (!pystatus) {
+      XrdCl::XRootDStatus xrd_st(XrdCl::stError, XrdCl::errInvalidArgs, 0,
+				 "Failed to add job to copy process");
+      pystatus = ConvertType(&xrd_st);
+      goto error;
+    }
+
+    if (PyDict_GetItemString(pystatus, "ok") == Py_False) {
+      goto error;
+    }
+
+    Py_XDECREF(pystatus);
+    pystatus = copyprocess->Prepare(copyprocess, NULL, NULL);
+
+    if (PyDict_GetItemString(pystatus, "ok") == Py_False) {
+      goto error;
+    }
+
+    Py_XDECREF(pystatus);
+    pystatus = copyprocess->Run(copyprocess, PyTuple_New(0), PyDict_New());
+
+    if (!pystatus) {
+      XrdCl::XRootDStatus xrd_st(XrdCl::stError, XrdCl::errInvalidArgs, 0,
+				 "Invalid argument for copy run operation");
+      pystatus = ConvertType(&xrd_st);
+      goto error;
+    }
+
+    ret = Py_BuildValue("O", PyTuple_GetItem(pystatus, 0));
+    goto finally;
+
+  error:
+    ret = pystatus;
+    Py_INCREF(ret);
+
+  finally:
+    Py_XDECREF(args);
+    Py_XDECREF(kwds);
+    Py_XDECREF(copyprocess);
+    Py_XDECREF(pystatus);
+    return ret;
   }
 
   //----------------------------------------------------------------------------
@@ -96,8 +151,8 @@ namespace PyXRootD
 
     pystatus = ConvertType<XrdCl::XRootDStatus>( &status );
     PyObject *o = ( callback && callback != Py_None ) ?
-            Py_BuildValue( "O", pystatus ) :
-            Py_BuildValue( "OO", pystatus, pyresponse );
+      Py_BuildValue( "O", pystatus ) :
+      Py_BuildValue( "OO", pystatus, pyresponse );
     Py_DECREF( pystatus );
     Py_XDECREF( pyresponse );
     return o;
