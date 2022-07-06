@@ -621,11 +621,13 @@ namespace XrdCl
           ++pgcnt;
           // the size of the 1st unaligned page
           uint32_t _1stpg = XrdSys::PageSize - remainder;
-          offset += _1stpg;
-          dlen   -= _1stpg + CksumSize;
+          if( _1stpg + CksumSize > dlen )
+            _1stpg = dlen - CksumSize;
+          dlen -= _1stpg + CksumSize;
         }
         pgcnt += dlen / PageWithCksum;
-        if( dlen % PageWithCksum ) ++ pgcnt;
+        if( dlen % PageWithCksum )
+          ++ pgcnt;
         return pgcnt;
       }
 
