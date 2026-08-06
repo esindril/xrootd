@@ -12,6 +12,7 @@
 #include "XrdXrootd/XrdXrootdTpcMon.hh"
 #include "XrdOuc/XrdOucPrivateUtils.hh"
 #include "XrdOuc/XrdOucTUtils.hh"
+#include "XrdOuc/XrdOucPrivateUtils.hh"
 #include "XrdHttpTpc/XrdHttpTpcUtils.hh"
 #include "XrdHttp/XrdHttpUtils.hh"
 
@@ -204,6 +205,52 @@ int TPCHandler::verify_callback(int preverify_ok, X509_STORE_CTX* ctx) {
     }
 
     return 0;
+}
+
+/******************************************************************************/
+/*                        d e b u g _ c a l l b a c k                         */
+/******************************************************************************/
+
+/**
+ * The callback that will be called by libcurl to report the protocol level
+ * debug information once CURLOPT_VERBOSE has been enabled.
+ *
+ * Only the informational text and the HTTP headers are reported, the transfer
+ * payload is deliberately dropped. Any authorization information carried by
+ * the headers is obfuscated before reaching the log.
+ */
+int TPCHandler::debug_callback(CURL *curl, curl_infotype type, char *data,
+                               size_t size, void *clientp) {
+  TPCLogRecord * rec = (TPCLogRecord *)clientp;
+  if (!rec || !rec->m_log || !data || !size) return 0;
+
+  const char *direction;
+  switch (type) {
+    case CURLINFO_TEXT:       direction = "*"; break;
+    case CURLINFO_HEADER_OUT: direction = ">"; break;
+    case CURLINFO_HEADER_IN:  direction = "<"; break;
+    default: return 0; // never log the transfer payload
+  }
+
+  // libcurl may hand over several lines in one go, log them individually so
+  // that each of them gets its own timestamp and log prefix.
+  const std::string msg(data, size);
+  size_t beg = 0;
+  while (beg < msg.size()) {
+    size_t end = msg.find('\n', beg);
+    if (end == std::string::npos) end = msg.size();
+    size_t len = end - beg;
+    // Drop the CR of an HTTP line terminator
+    if (len && (msg[beg + len - 1] == '\r')) len--;
+    if (len) {
+      std::stringstream ss;
+      ss << "event=CURL_DEBUG, local=" << rec->local << ", remote=" << rec->remote
+         << "; " << direction << " " << obfuscateAuth(msg.substr(beg, len));
+      rec->m_log->Log(LogMask::Debug, rec->log_prefix.c_str(), ss.str().c_str());
+    }
+    beg = end + 1;
+  }
+  return 0;
 }
 
 /******************************************************************************/
@@ -982,6 +1029,12 @@ int TPCHandler::ProcessPushReq(const std::string & resource, XrdHttpExtReq &req)
     curl_easy_setopt(curl, CURLOPT_CLOSESOCKETDATA, &rec);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, CONNECT_TIMEOUT);
 
+    if (m_log.getMsgMask() & LogMask::Debug) {
+      curl_easy_setopt(curl, CURLOPT_DEBUGFUNCTION, debug_callback);
+      curl_easy_setopt(curl, CURLOPT_DEBUGDATA, &rec);
+      curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+    }
+
     auto query_header = XrdOucTUtils::caseInsensitiveFind(req.headers,"xrd-http-fullresource");
     std::string redirect_resource = req.resource;
     if (query_header != req.headers.end()) {
@@ -1099,6 +1152,13 @@ int TPCHandler::ProcessPullReq(const std::string &resource, XrdHttpExtReq &req) 
     curl_easy_setopt(curl, CURLOPT_CLOSESOCKETFUNCTION, closesocket_callback);
     curl_easy_setopt(curl, CURLOPT_CLOSESOCKETDATA, &rec);
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, CONNECT_TIMEOUT);
+
+    if (m_log.getMsgMask() & LogMask::Debug) {
+      curl_easy_setopt(curl, CURLOPT_DEBUGFUNCTION, debug_callback);
+      curl_easy_setopt(curl, CURLOPT_DEBUGDATA, &rec);
+      curl_easy_setopt(curl, CURLOPT_VERBOSE, 1L);
+    }
+
     std::unique_ptr<XrdSfsFile> fh(m_sfs->newFile(name, m_monid++));
     if (!fh.get()) {
         std::stringstream ss;

@@ -65,6 +65,8 @@ private:
     static int closesocket_callback(void *clientp, curl_socket_t fd);
     static int ssl_ctx_callback(CURL *curl, void *ssl_ctx, void *clientp);
     static int verify_callback(int preverify_ok, X509_STORE_CTX* ctx);
+    static int debug_callback(CURL *curl, curl_infotype type, char *data,
+                              size_t size, void *clientp);
 
     struct TPCLogRecord {
 
